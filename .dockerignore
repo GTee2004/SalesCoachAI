@@ -1,0 +1,6 @@
+# The backend image copies only requirements.txt and src/; keep the context small
+*
+!requirements.txt
+!src/
+**/__pycache__
+**/*.pyc

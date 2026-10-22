@@ -1,0 +1,86 @@
+# Full stack on one Linux host behind an HTTPS reverse proxy (see "Docker
+# deployment" in README.md).
+# Host networking lets WebRTC media reach the backend over UDP, and keeps the
+# 127.0.0.1 URLs the two services use to call each other.
+# Database: reached through DATABASE_URL in frontend/.env, either an external
+# server or the optional postgres service below (--profile db). Schema changes
+# (pnpm db:push) and seeding stay manual, outside Docker.
+
+services:
+  backend:
+    build: .
+    network_mode: host
+    env_file: .env
+    environment:
+      APP_HOST: 127.0.0.1
+      APP_PORT: "8000"
+    volumes:
+      - aic-models:/home/appuser/.cache/pipecat
+    restart: unless-stopped
+    # Lets live voice sessions close and report before the container is killed
+    stop_grace_period: 60s
+
+  frontend:
+    build:
+      context: ./frontend
+      target: runtime
+    network_mode: host
+    env_file: ./frontend/.env
+    environment:
+      HOST: 127.0.0.1
+      PORT: "4500"
+    depends_on:
+      backend:
+        condition: service_started
+      # Waits for the db profile's database when it is on; ignored otherwise
+      postgres:
+        condition: service_healthy
+        required: false
+    restart: unless-stopped
+
+  # Optional, off by default: PostgreSQL in Docker instead of an external
+  # database (Neon, managed or self-hosted). In frontend/.env, set
+  # POSTGRES_PASSWORD (POSTGRES_USER and POSTGRES_DB default to postgres) and
+  #   DATABASE_URL=postgresql://postgres:<password>@127.0.0.1:5432/postgres
+  # then start it with
+  #   docker compose --profile db up -d
+  # Schema and seed stay manual: pnpm db:push, then pnpm db:seed-practices.
+  # The password only applies when the data volume is first created.
+  postgres:
+    profiles: [db]
+    image: postgres:17
+    env_file: ./frontend/.env
+    ports:
+      # Loopback only: reachable from the host-network frontend, not the internet
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  # Optional, off by default: expires unpaid orders once a minute. Needs billing
+  # configured in frontend/.env (BILLING_SWEEP_SECRET). Start it with
+  #   docker compose --profile billing up -d
+  # or set COMPOSE_PROFILES=billing in the server's shell to keep it on.
+  billing-sweep:
+    profiles: [billing]
+    build:
+      context: ./frontend
+      target: runtime
+    network_mode: host
+    env_file: ./frontend/.env
+    command: ["sh", "-c", "while :; do node scripts/billing-sweep.mjs; sleep 60; done"]
+    healthcheck:
+      disable: true
+    depends_on:
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  aic-models:
+  pgdata:

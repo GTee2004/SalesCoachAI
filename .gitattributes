@@ -1,0 +1,2 @@
+# Keep TanStack's generated route tree consistent across operating systems.
+frontend/src/routeTree.gen.ts text eol=lf
